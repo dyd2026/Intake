@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Document Secure Upload</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f5f7fa;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 90vh;
+        }
+
+        .card {
+            background: white;
+            padding: 35px 25px; 
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .logo-placeholder {
+            font-size: 1.6rem; 
+            font-weight: bold;
+            color: #0076a3;
+            margin-bottom: 15px;
+        }
+
+        p {
+            font-size: 1.2rem; 
+            color: #444;
+            line-height: 1.6;
+            margin-bottom: 30px;
+        }
+
+        .camera-btn {
+            background-color: #0076a3;
+            color: white;
+            border: none;
+            width: 95px;  
+            height: 95px; 
+            border-radius: 50%;
+            font-size: 2.5rem; 
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,118,163,0.3);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 15px;
+            transition: transform 0.1s ease;
+        }
+
+        .camera-btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn-label {
+            font-weight: bold;
+            color: #0076a3;
+            font-size: 1.2rem; 
+            margin-bottom: 20px;
+        }
+
+        #cameraInput {
+            display: none;
+        }
+
+        .status-message {
+            margin-top: 20px;
+            font-size: 1.1rem; 
+            font-weight: 600;
+            line-height: 1.5;
+            white-space: pre-line;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 6px;
+        }
+
+        .success { 
+            color: #155724; 
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+        }
+        .error { 
+            color: #721c24; 
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <div class="logo-placeholder">Secure Upload</div>
+    <p>Tap the camera below to take a photo of your pet's <strong>Rabies Certificate</strong>.</p>
+    
+    <label for="cameraInput" class="camera-btn">
+        📸
+    </label>
+    <div class="btn-label">Tap to Snap Photo</div>
+
+    <input type="file" id="cameraInput" accept="image/*" capture="camera">
+
+    <div id="uploadStatus" class="status-message">Connecting to agent...</div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script>
+    const cameraInput = document.getElementById('cameraInput');
+    const uploadStatus = document.getElementById('uploadStatus');
+
+    // Extract your Mac's unique WebRTC Station ID from the URL Hash
+    const targetMacId = window.location.hash.substring(1);
+
+    let peer = null;
+    let conn = null;
+    let pendingImagePayload = null; // Local memory safety vault for image data bits
+
+    if (!targetMacId) {
+        uploadStatus.className = "status-message error";
+        uploadStatus.innerText = "Error: Invalid link. Please check with support agent.";
+    } else {
+        initPeerConnection();
+    }
+
+    // 1. Core Connection Manager
+    function initPeerConnection() {
+        if (peer) {
+            try { peer.destroy(); } catch(e) {}
+        }
+
+        // Boot clean P2P peer without tying down system AV hardware locks
+        peer = new Peer();
+        
+        peer.on('open', () => {
+            connectToAgent();
+        });
+
+        peer.on('error', (err) => {
+            console.error("PeerJS Core Error:", err);
+            // Auto-reconnect on core layer failure loops
+            setTimeout(initPeerConnection, 2000); 
+        });
+    }
+
+    // 2. Outbound Tunnel Builder
+    function connectToAgent() {
+        uploadStatus.className = "status-message";
+        uploadStatus.innerText = "Connecting to agent...";
+
+        conn = peer.connect(targetMacId, {
+            reliable: true // Hard enforcement for error-checked data packet delivery
+        });
+        
+        conn.on('open', () => {
+            // IF QUEUED: If an image was cached during a background crash, fire it now
+            if (pendingImagePayload) {
+                attemptPayloadDelivery();
+            } else {
+                uploadStatus.className = "status-message success";
+                uploadStatus.innerText = "Connected to Secure Stream!\nReady to snap photo.";
+            }
+        });
+
+        conn.on('close', () => { handleDisconnect(); });
+        conn.on('error', () => { handleDisconnect(); });
+    }
+
+    // 3. High-Reliability Delivery Fallback Engine
+    function attemptPayloadDelivery() {
+        // Enforce that the channel states are completely verified and open
+        if (conn && conn.open && pendingImagePayload) {
+            uploadStatus.className = "status-message";
+            uploadStatus.innerText = "Processing and preparing document...";
+            
+            conn.send({ image: pendingImagePayload });
+            pendingImagePayload = null; // Wipe local variable immediately on successful handoff
+            
+            uploadStatus.className = "status-message success";
+            uploadStatus.innerText = "✓ Sent Successfully!\nYour agent has received it.";
+        } else {
+            // Buffer safety valve: if connection is open but pipe isn't ready for bytes, retry every 500ms
+            setTimeout(attemptPayloadDelivery, 500);
+        }
+    }
+
+    // 4. Silent Connection Recovery
+    function handleDisconnect() {
+        // Silently re-establish the transport tunnel in the background
+        setTimeout(initPeerConnection, 1000);
+    }
+
+    // 5. Native Image Capture & Compression Pipeline
+    cameraInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        uploadStatus.className = "status-message";
+        uploadStatus.innerText = "Processing and preparing document...";
+
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const img = new Image();
+            img.onload = function() {
+                const canvas = document.createElement('canvas');
+                const MAX_WIDTH = 1200; // Text scales cleanly while stripping weight out of the file
+                let width = img.width;
+                let height = img.height;
+
+                if (width > MAX_WIDTH) {
+                    height *= MAX_WIDTH / width;
+                    width = MAX_WIDTH;
+                }
+                canvas.width = width;
+                canvas.height = height;
+                
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                // Compress photo down to a lightweight 70% JPEG stream to slip through bad service
+                const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                
+                // CACHE FIRST: Instantly lock the image payload to the phone's memory
+                pendingImagePayload = compressedDataUrl;
+                
+                // Execute transmission routing based on current live state
+                if (conn && conn.open) {
+                    attemptPayloadDelivery();
+                } else {
+                    handleDisconnect();
+                }
+            };
+            img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+    });
+</script>
+</body>
+</html>
